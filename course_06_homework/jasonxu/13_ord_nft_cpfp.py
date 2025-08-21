@@ -139,7 +139,7 @@ def create_nft_commit_transaction():
         if change_amount > 0:
             print(f"输出1: {change_amount} sats -> {key_path_address.to_string()} (找零)")
         
-        return commit_tx, temp_address, key_path_address
+        return commit_tx, temp_address, key_path_address, change_amount
         
     except Exception as e:
         print(f"❌ 签名失败: {e}")
@@ -164,6 +164,7 @@ def create_nft_reveal_transaction():
     print(f"临时地址: {commit_info['temp_address']}")
     print(f"主地址: {commit_info['key_path_address']}")
     print(f"inscription金额: {commit_info['inscription_amount']} sats")
+    print(f"change金额: {commit_info['change_amount']} sats")
     
     # 初始化密钥
     private_key = PrivateKey.from_wif(conf.get("testnet3", "private_key_wif"))
@@ -185,7 +186,7 @@ def create_nft_reveal_transaction():
         public_key.to_x_only_hex(),
         "OP_CHECKSIG"
         ]
-    nft_script = build_nft_script("/home/jfxu/Downloads/good.jpeg")
+    nft_script = build_nft_script("/home/jfxu/Downloads/good.png")
     for item in nft_script:
         inscription_script.append(item)
     inscription_script = Script(inscription_script)
@@ -207,7 +208,8 @@ def create_nft_reveal_transaction():
     # 计算reveal输出金额
     inscription_amount = commit_info['inscription_amount']
     reveal_fee = FEE_CONFIG['reveal_fee']
-    output_amount = inscription_amount - reveal_fee
+    output_amount = inscription_amount - reveal_fee # 546
+    change_amount = commit_info['change_amount']
     
     print(f"\n=== REVEAL金额计算 ===")
     print(f"输入金额: {inscription_amount} sats")
@@ -222,27 +224,35 @@ def create_nft_reveal_transaction():
     # 创建交易
     print(f"\n=== 构建REVEAL交易 ===")
     
-    tx_input = TxInput(commit_info['commit_txid'], 0)
-    tx_output = TxOutput(output_amount, key_path_address.to_script_pub_key())
+    tx_input1 = TxInput(commit_info['commit_txid'], 0)
+    tx_input2 = TxInput(commit_info['commit_txid'], 1)
+    tx_output = TxOutput(output_amount, key_path_address.to_script_pub_key()) 
+    change_output = TxOutput(change_amount-9*2500, key_path_address.to_script_pub_key()) 
     
-    reveal_tx = Transaction([tx_input], [tx_output], has_segwit=True)
+    reveal_tx = Transaction([tx_input1, tx_input2], [tx_output, change_output], has_segwit=True)
     
     print(f"未签名交易: {reveal_tx.serialize()}")
     
     # 签名交易
     try:
         # 关键: script path签名
-        signature = private_key.sign_taproot_input(
+        sig1 = private_key.sign_taproot_input(
             reveal_tx,
             0,
-            [temp_address.to_script_pub_key()],
-            [inscription_amount],
+            [temp_address.to_script_pub_key(), key_path_address.to_script_pub_key()],
+            [inscription_amount, change_amount],
             script_path=True,
             tapleaf_script=inscription_script,
             tweak=False
         )
-        
-        print(f"✅ 签名成功: {signature}")
+        sig2 = private_key.sign_taproot_input(
+            reveal_tx,
+            1,
+            [temp_address.to_script_pub_key(), key_path_address.to_script_pub_key()],
+            [inscription_amount, change_amount]
+        )        
+
+        print(f"✅ 签名成功: {sig1, sig2}")
         
         # 创建控制块
         control_block = ControlBlock(
@@ -257,11 +267,14 @@ def create_nft_reveal_transaction():
         
         # 构建witness
         reveal_tx.witnesses.append(TxWitnessInput([
-            signature,
+            sig1,
             inscription_script.to_hex(),
             control_block.to_hex()
         ]))
-        
+        reveal_tx.witnesses.append(TxWitnessInput([
+            sig2
+        ]))       
+
         print(f"\n✅ REVEAL交易签名成功!")
         print(f"TxID: {reveal_tx.get_txid()}")
         print(f"WTxID: {reveal_tx.get_wtxid()}")
@@ -299,14 +312,15 @@ def broadcast_tx_by_mempoolspace(tx):
 
 if __name__ == "__main__":
 
-    commit_tx, temp_address, key_path_address = create_nft_commit_transaction()
+    commit_tx, temp_address, key_path_address, change_amount = create_nft_commit_transaction()
     if commit_tx:
         # 保存关键信息到文件，供reveal使用
         commit_info = {
             "commit_txid": commit_tx.get_txid(),
             "temp_address": temp_address.to_string(),
             "key_path_address": key_path_address.to_string(),
-            "inscription_amount": calculate_inscription_amount()
+            "inscription_amount": calculate_inscription_amount(),
+            "change_amount": change_amount
         }
 
         with open("commit_info.json", "w") as f:
@@ -319,3 +333,8 @@ if __name__ == "__main__":
     signed_tx = commit_tx.serialize()
     print("\n commit transaction:\n" + signed_tx)
     broadcast_tx_by_mempoolspace(signed_tx)
+
+    reveal_tx = create_nft_reveal_transaction()
+    signed_tx = reveal_tx.serialize()
+    print("\n reveal transaction:\n" + signed_tx)
+    broadcast_tx_by_mempoolspace(signed_tx)        

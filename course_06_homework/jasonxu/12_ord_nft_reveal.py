@@ -184,7 +184,7 @@ def create_nft_reveal_transaction():
         public_key.to_x_only_hex(),
         "OP_CHECKSIG"
         ]
-    nft_script = build_nft_script("/home/jfxu/Downloads/good.jpeg")
+    nft_script = build_nft_script("/home/jfxu/Downloads/good.png")
     for item in nft_script:
         inscription_script.append(item)
     inscription_script = Script(inscription_script)
